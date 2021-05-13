@@ -13,8 +13,8 @@ import math
 
 class Stock_Analyzer:
     def __init__(self,
-                 tickers = ['TSLA'],
-                 period = "6mo",
+                 tickers = ['NIO'],
+                 period = "12mo",
                  interval = "1d"):
         self.tickers = tickers
         self.period = period
@@ -216,6 +216,62 @@ class Stock_Analyzer:
         self.data['KAMA'] = kama
         return kama
         
+    def aroon(self, period):
+        #AROON
+        #Use standard 25 days for length
+        day_high = self.high.rolling(period).max()
+        for i in range(period, -1, -1):
+            day_high.loc[self.high.shift(i) == day_high] = i
+        day_high = (period - day_high)*4
+        self.data['AROON_UP'] = day_high
+        
+        day_low = self.low.rolling(period).min()
+        for i in range(period, -1, -1):
+            day_low.loc[self.low.shift(i) == day_low] = i
+        day_low = (period - day_low)*4
+        self.data['AROON_DOWN'] = day_low
+        return day_high 
+    
+    def pivot_point(self):
+        #PIVOT POINTS
+        #Provides pivot points per month
+        p_points = (self.high + self.low + self.close)/3
+        high = self.high + 0
+        low = self.low + 0
+        
+        date = p_points.index;
+        pivotIndex = -1
+        activeMonth = -1
+        
+        for i in range(len(p_points)-1,-1,-1):
+            tickMonth = date[i].month
+            if(activeMonth!=tickMonth):
+                activeMonth = tickMonth
+                pivotIndex = i
+                j = i               
+                while(j>0):
+                    previousTickMonth = date[j].month;
+                    if(previousTickMonth!=activeMonth):
+                        break
+                    pivotIndex = j
+                    j = j - 1
+            
+            p_points[i] =  p_points[pivotIndex]
+            high[i] = high[pivotIndex]
+            low[i] = low[pivotIndex]
+
+        s1 = p_points*2 - high
+        r1 = p_points*2 - low
+        s2 = p_points - (high - low)
+        r2 = p_points + (high - low)
+                  
+        self.data['P_P'] = p_points
+        self.data['S1'] = s1
+        self.data['R1'] = r1
+        self.data['S2'] = s2
+        self.data['R2'] = r2
+        return p_points
+    
     def plot_data(self,extra_cols):
         apdict = mpf.make_addplot(self.data[extra_cols])
         mpf.plot(self.data, type = 'candlestick', volume = False, show_nontrading = False, addplot=apdict)
@@ -225,9 +281,8 @@ class Stock_Analyzer:
         #mpf.plot(self.data, volume = False, addplot = apdict, type = 'line', mav = (20))
         
 test = Stock_Analyzer()
-test.ema(20)
-test.sma(20)
-test.plot_data(['EMA_20', 'SMA_20'])
+test.pivot_point()
+test.plot_data([ 'P_P', 'S1', 'R1', 'S2', 'R2'])
 
 """
 test.ema(9)
