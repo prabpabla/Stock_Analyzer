@@ -9,12 +9,13 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 import mplfinance as mpf
+import matplotlib.pyplot as plt
 import math
 
 class Stock_Analyzer:
     def __init__(self,
                  tickers = ['NIO'],
-                 period = "12mo",
+                 period = "6mo",
                  interval = "1d"):
         self.tickers = tickers
         self.period = period
@@ -24,6 +25,7 @@ class Stock_Analyzer:
         self.high = self.data['High']
         self.low = self.data['Low']
         self.close = self.data['Close']
+        self.volume = self.data['Volume']
     
     def __read_data(self):
         data = yf.download(tickers = self.tickers, period = self.period, interval = self.interval, group_by = "Ticker", prepost = True)
@@ -64,6 +66,13 @@ class Stock_Analyzer:
         dema = 2*self.ema(period) - ema_of_ema
         self.data[f'DEMA_{period}'] = dema
     
+    def tema(self, period):
+        #TRIPLE EXPONENTIAL MOVING AVERAGE
+        ema_of_ema = self.ema(period).ewm(span = period, adjust = False).mean()
+        ema_of_ema_of_ema = ema_of_ema.ewm(span = period, adjust = False).mean()
+        tema = 3*self.ema(period) - 3*ema_of_ema + ema_of_ema_of_ema
+        self.data[f'TEMA_{period}'] = tema
+    
     def std_dev(self, period):
         #STANDARD DEVIATION
         std_dev = self.close.rolling(window = period).std()
@@ -80,6 +89,20 @@ class Stock_Analyzer:
         self.data[f'UPPER_BB_{period}'] = upper_band
         self.data[f'LOWER_BB_{period}'] = lower_band
         return middle_band, upper_band, lower_band
+    
+    def b_bandwidth(self, period):
+        #BOLLINGER BANDWIDTH
+        middle_band, upper_band, lower_band = self.b_band(period)
+        bbw = ((upper_band - lower_band)/middle_band)*100
+        self.data[f'B_BW_{period}'] = bbw
+        return bbw
+    
+    def percent_bb(self, period):
+        #PERCENT BOLLINGER BAND
+        middle_band, upper_band, lower_band = self.b_band(period)
+        pbb = (self.close - lower_band)/(upper_band - lower_band)
+        self.data[f'%_BB_{period}'] = pbb
+        return pbb
     
     def atr(self, period):
         #AVERAGE TRUE RANGE
@@ -232,6 +255,140 @@ class Stock_Analyzer:
         self.data['AROON_DOWN'] = day_low
         return day_high 
     
+    def vol_by_price(self, p_range):
+        #VOLUME BY PRICE
+        #Plots a horizontal histogram, showing the amount of activity at price intervals
+        lowest_low = round(self.low.min())
+        highest_high = round(self.high.max())
+        range_div = (highest_high - lowest_low)/p_range
+        
+        price_range = []
+        for i in range(p_range):
+            price_range.append(lowest_low + range_div*i)
+        #print(price_range)
+        
+        volume_range = [0]*p_range
+        for i in range(len(price_range)):
+            for j in range(len(self.close)):
+                #print(self.close[j] , ',' , price_range[i])
+                if (price_range[i] <= self.close[j] <= (price_range[i] + range_div)):
+                    volume_range[i] = volume_range[i] + self.volume[j]
+        #print(volume_range)
+        plt.barh(price_range, volume_range)
+        
+    def vwap(self):
+        #VOLUME WEIGHTED AVERAGE PRICE
+        #Based on total dollar value of all trades for current day, divided by total trading volume for current day
+        typical_price = (self.high + self.low + self.close)/3
+        """
+        vol_price = typical_price * self.volume
+        total_vol_price = vol_price.copy()
+        for i in range(len(typical_price)):
+            if i > 0:
+                total_vol_price[i] = total_vol_price[i] + total_vol_price[i-1]
+        
+        total_vol = self.volume.copy()
+        for i in range(len(typical_price)):
+            if i > 0:
+                total_vol[i] = total_vol[i] + total_vol[i-1]
+                
+        vwap = total_vol_price/total_vol
+        print(vol_price, typical_price, self.volume)
+        """
+        vwap = (np.cumsum(self.volume*typical_price)/(np.cumsum(self.volume))).ffill()
+        #vwap = (self.volume*typical_price).rolling(20).sum()/self.volume.rolling(20).sum()
+        self.data['VWAP'] = vwap
+        return vwap
+     
+    def adl(self):
+        #ACCUMULATION DISTRIBUTION LINE
+        #Volume based indicator designed to measure the cumulative flow of money 
+        #Money Flow Multiplier, Money Flow Volume
+        mfm = ((self.close - self.low) - (self.high - self.close))/(self.high - self.low)
+        mfv = mfm*self.volume
+        adl = mfv.copy()*0
+        adl = adl.shift() + mfv
+        self.data['ADL'] = adl
+        return adl
+    
+    def obv(self):
+        #ON BALANCE VOLUME
+        #Measures buying and selling pressure as a cumulative indicator
+        obv = self.volume.copy()
+        for i in range(len(obv)):
+            if i > 0:
+                if self.close[i] > self.close[i-1]:
+                    obv[i] = obv[i-1] + self.volume[i]
+                if self.close[i] < self.close[i-1]:
+                    obv[i] = obv[i-1] - self.volume[i]    
+        self.data['OBV'] = obv
+        return obv
+    
+    def cmf(self):
+        #CHAIKIN MONEY FLOW
+        #Measures the amount of Money Flow Volume over a specific period
+        #Money Flow Multiplier, Money Flow Volume
+        mfm = ((self.close - self.low) - (self.high - self.close))/(self.high - self.low)
+        mfv = mfm*self.volume
+        cmf = mfv.rolling(20).sum()/self.volume.rolling(20).sum()
+        self.data['CMF'] = cmf
+        return cmf
+    
+    def chaikin(self):
+        #CHAIKIN OSCILLATOR
+        #Measures the momentum of the Accumulation Distribution Line using the MACD formula
+        adl_3_ema = self.adl().ewm(span = 3, adjust = False, min_periods = 3).mean()
+        adl_10_ema = self.adl().ewm(span = 10, adjust = False, min_periods = 10).mean()
+        cosc = adl_3_ema - adl_10_ema
+        self.data['COSC'] = cosc
+        return cosc
+    
+    def bop(self):
+        #BALANCE OF POWER, or BALANCE OF MARKET POWER (BMP)
+        #Oscillator that measures the strength of buying and selling pressure
+        bop = ((self.close - self.open)/(self.high - self.low))
+        self.data['BOP'] = bop
+        return bop
+    
+    def pvo(self):
+        #PERCENT VOLUME OSCILLATOR
+        #Use standard 12, 26 for EMA period, 9 for Signal Line EMA period
+        vol_ema_12 = self.volume.ewm(span = 12, adjust = False, min_periods = 12).mean()
+        vol_ema_26 = self.volume.ewm(span = 26, adjust = False, min_periods = 26).mean()
+        pvo = (vol_ema_12 - vol_ema_26)/(vol_ema_26)*100
+        signal_line = pvo.ewm(span = 9, adjust = False, min_periods = 9).mean()
+        #ppo_hist = pvo - signal_line
+        self.data['PVO'] = pvo
+        self.data['PVO_SIG'] = signal_line
+        return pvo, signal_line
+    
+    def roc(self, period):
+        #RATE OF CHANGE
+        #Pure momentum oscillator, measures percent change in price from one period to next
+        roc = (self.close - self.close.shift(period))/(self.close.shift(period))*100
+        """
+        roc = self.close.copy()*0
+        for i in range(len(roc)):
+            if i > period:
+                roc[i] = (self.close[i] - self.close[i - period])/(self.close[i - period])*100
+        """
+        self.data['ROC'] = roc
+        return roc
+    
+    def kst(self):
+        #KNOW SURE THING, or SUMMED RATE OF CHANGE
+        #Weighted average of four different rate-of-change values that have been smoothed
+        #Use standard 10, 15, 20, 30 for ROC period, 10, 10, 10, 15 for SMA period, 9 for Signal Line
+        rcma1 = self.roc(10).rolling(10).mean()
+        rcma2 = self.roc(15).rolling(10).mean()
+        rcma3 = self.roc(20).rolling(10).mean()
+        rcma4 = self.roc(30).rolling(15).mean()
+        kst = rcma1 + rcma2*2 + rcma3*3 + rcma4*4
+        signal_line = kst.rolling(9).mean()
+        self.data['KST'] = kst
+        self.data['KST_SIG'] = signal_line
+        return kst, signal_line
+    
     def pivot_point(self):
         #PIVOT POINTS
         #Provides pivot points per month
@@ -281,8 +438,12 @@ class Stock_Analyzer:
         #mpf.plot(self.data, volume = False, addplot = apdict, type = 'line', mav = (20))
         
 test = Stock_Analyzer()
-test.pivot_point()
-test.plot_data([ 'P_P', 'S1', 'R1', 'S2', 'R2'])
+#test.pivot_point()
+#test.plot_data([ 'P_P', 'S1', 'R1', 'S2', 'R2'])
+
+#test.ema(9)
+test.cmf()
+test.plot_data(['CMF'])
 
 """
 test.ema(9)
